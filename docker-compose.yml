@@ -1,0 +1,291 @@
+# ============================================================
+# Homelab Docker Compose Stack
+# Server: Oracle Free Tier VM.Standard.A1.Flex (4 ARM OCPUs, 24 GB RAM)
+# Reference: Deployment-Guide.md
+#
+# ── Before starting: ────────────────────────────────────────
+#   1. Copy this file to /data/docker-compose.yml on the server
+#   2. Create /data/.env and fill in all secrets (see Step 3.5)
+#   3. Run: sudo chmod 600 /data/.env
+#   4. Run: sudo chown ubuntu:ubuntu /data/docker-compose.yml /data/.env
+#   5. Run: docker compose up -d
+#
+# ── Image version pinning (as of 2026-03-06): ──────────────
+#   All images are pinned to specific stable versions.
+#   To update, check Docker Hub / GHCR for newer ARM64 tags,
+#   test in staging, then update the tag here.
+# ============================================================
+
+# Sets the project name so container/network names are always
+# prefixed with 'homelab' regardless of the directory name.
+name: homelab
+
+networks:
+  # Internal-only network — databases are NOT reachable from the host or internet
+  internal-net:
+    driver: bridge
+    internal: true
+  # Public-facing network — Nginx, Portainer, Homepage, Jellyfin, Syncthing
+  public-net:
+    driver: bridge
+
+services:
+  # ──────────────────────────────────────────────────────────
+  # DATABASES  (internal-net only — not exposed to internet)
+  # ──────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-bookworm
+    container_name: postgres
+    restart: unless-stopped
+    env_file: /data/.env # needs: POSTGRES_PASSWORD
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: default_db
+    # Performance tuning for 24 GB RAM server
+    command: >
+      postgres
+        -c shared_buffers=1GB
+        -c work_mem=16MB
+        -c maintenance_work_mem=256MB
+        -c max_connections=100
+    volumes:
+      # Always use a subdirectory — never mount /data directly (lost+found issue)
+      - /data/postgres:/var/lib/postgresql/data
+      - /data/postgres-init:/docker-entrypoint-initdb.d:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - internal-net
+    mem_limit: 2560m # enforced by docker compose (plain, non-swarm)
+    deploy:
+      resources:
+        limits:
+          memory: 2560M # honoured by Docker Compose v2 plugin; kept for swarm compat
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  mongo:
+    image: mongo:7.0-jammy
+    container_name: mongo
+    restart: unless-stopped
+    env_file: /data/.env # needs: MONGO_PASSWORD
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    volumes:
+      - /data/mongo:/data/db
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - internal-net
+    mem_limit: 2560m
+    deploy:
+      resources:
+        limits:
+          memory: 2560M
+    healthcheck:
+      # Using escaped double-quotes inside CMD-SHELL: portable across all Docker versions
+      test:
+        [
+          "CMD-SHELL",
+          'mongosh --eval "db.runCommand({ping:1})" --quiet || exit 1',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  qdrant:
+    image: qdrant/qdrant:v1.16.3
+    container_name: qdrant
+    restart: unless-stopped
+    env_file: /data/.env # needs: QDRANT_API_KEY
+    environment:
+      # API key auth — protects Qdrant even on the internal Docker network.
+      # Value must match QDRANT_API_KEY in /data/.env
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+      # Move HNSW graph indices to disk to prevent mmap OOM kills
+      # on large vector collections. Required for memory-constrained servers.
+      QDRANT__HNSW_INDEX__ON_DISK: "true"
+    volumes:
+      - /data/qdrant:/qdrant/storage
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - internal-net
+    mem_limit: 5120m
+    deploy:
+      resources:
+        limits:
+          memory: 5120M
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider http://localhost:6333/healthz || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ──────────────────────────────────────────────────────────
+  # AUTOMATION
+  # ──────────────────────────────────────────────────────────
+
+  n8n:
+    image: n8nio/n8n:2.11.0
+    container_name: n8n
+    restart: unless-stopped
+    env_file: /data/.env # needs: POSTGRES_PASSWORD, N8N_ENCRYPTION_KEY, N8N_WEBHOOK_URL
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=3584"
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n_backend
+      DB_POSTGRESDB_USER: admin
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      # Set N8N_WEBHOOK_URL in /data/.env — e.g. https://n8n.yourdomain.com/
+      # Do NOT hardcode here: a wrong URL silently breaks all webhook triggers.
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+    volumes:
+      - /data/n8n:/home/node/.n8n
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - internal-net # to reach postgres, mongo, qdrant
+      - public-net # to be reachable by nginx
+    mem_limit: 4096m
+    deploy:
+      resources:
+        limits:
+          memory: 4096M
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ──────────────────────────────────────────────────────────
+  # WEB SERVER
+  # ──────────────────────────────────────────────────────────
+
+  nginx:
+    image: nginx:1.28.2-alpine
+    container_name: nginx
+    restart: unless-stopped
+    # No env_file: nginx is a static reverse proxy — it reads no environment variables.
+    # Injecting secrets here would expose them to any process inside the container.
+    ports:
+      - "80:80" # OCI LB sends traffic here; VCN Security List restricts to LB subnet only
+    volumes:
+      - /data/nginx/conf.d:/etc/nginx/conf.d:ro
+      - /data/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /data/websites:/var/www/html:ro # portfolio static files
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - public-net
+    mem_limit: 256m
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    depends_on:
+      - n8n # ensures n8n is registered in Docker DNS before nginx starts
+      - portainer
+      - homepage
+      - jellyfin
+      - syncthing
+
+  # ──────────────────────────────────────────────────────────
+  # MANAGEMENT
+  # ──────────────────────────────────────────────────────────
+
+  portainer:
+    image: portainer/portainer-ce:2.39.0
+    container_name: portainer
+    restart: unless-stopped
+    # No env_file: portainer uses none of the .env secrets.
+    volumes:
+      # WARNING: /var/run/docker.sock grants full root-equivalent access to the host.
+      # Portainer requires write access to manage containers — this is intentional.
+      # Mitigate by: strong admin password + 2FA (Step 7.1) + restricting to internal subnet.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /data/portainer:/data
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - public-net
+    mem_limit: 256m
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  homepage:
+    image: ghcr.io/gethomepage/homepage:v1.10.1
+    container_name: homepage
+    restart: unless-stopped
+    # No env_file: homepage reads its own config from /app/config/*.yaml, not .env secrets.
+    volumes:
+      - /data/homepage:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro # read-only — for container widget data
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - public-net
+    mem_limit: 128m
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ──────────────────────────────────────────────────────────
+  # MEDIA & SYNC
+  # ──────────────────────────────────────────────────────────
+
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:10.11.6
+    container_name: jellyfin
+    restart: unless-stopped
+    # No env_file: PUID/PGID are defined inline; no .env secrets needed.
+    environment:
+      PUID: 1000
+      PGID: 1000
+    volumes:
+      - /data/jellyfin/config:/config
+      # Syncthing writes to /data/media/music on the host; Jellyfin reads it here read-only
+      - /data/media:/data/media:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - public-net
+    mem_limit: 2048m
+    deploy:
+      resources:
+        limits:
+          memory: 2048M
+
+  syncthing:
+    image: lscr.io/linuxserver/syncthing:v2.0.14-ls209
+    container_name: syncthing
+    restart: unless-stopped
+    # No env_file: PUID/PGID are defined inline; no .env secrets needed.
+    environment:
+      PUID: 1000
+      PGID: 1000
+    ports:
+      # Syncthing sync protocol — allowed through VCN Security List (Step 1.2)
+      - "22000:22000/tcp"
+      - "22000:22000/udp"
+    volumes:
+      - /data/syncthing/config:/config
+      # Write target: syncthing downloads music here; jellyfin reads from /data/media above
+      - /data/media/music:/data/media/music
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - public-net
+    mem_limit: 512m
+    deploy:
+      resources:
+        limits:
+          memory: 512M

@@ -1,0 +1,48 @@
+---
+# Homepage Dashboard — Service Links
+# Docs: https://gethomepage.dev/configs/services/
+
+- Infrastructure:
+    - Portainer:
+        href: https://portainer.yourdomain.com
+        icon: portainer.png
+        description: Container Management
+        server: my-docker
+        container: portainer
+    - N8N:
+        href: https://n8n.yourdomain.com
+        icon: n8n.png
+        description: Workflow Automation
+        server: my-docker
+        container: n8n
+
+- Media:
+    - Jellyfin:
+        href: https://media.yourdomain.com
+        icon: jellyfin.png
+        description: Music Streaming
+        server: my-docker
+        container: jellyfin
+    - Syncthing:
+        href: https://sync.yourdomain.com
+        icon: syncthing.png
+        description: File Sync
+        server: my-docker
+        container: syncthing
+
+- Databases:
+    - PostgreSQL:
+        icon: postgres.png
+        description: Relational Database
+        server: my-docker
+        container: postgres
+    - MongoDB:
+        icon: mongodb.png
+        description: Document Database
+        server: my-docker
+        container: mongo
+    - Qdrant:
+        icon: qdrant.png
+        description: Vector Database
+        server: my-docker
+        container: qdrant

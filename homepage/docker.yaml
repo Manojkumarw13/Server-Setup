@@ -1,0 +1,7 @@
+---
+# Homepage Dashboard — Docker Integration
+# Docs: https://gethomepage.dev/configs/docker/
+# Uses the read-only Docker socket mounted in docker-compose.yml
+
+my-docker:
+  socket: /var/run/docker.sock

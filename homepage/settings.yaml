@@ -1,0 +1,26 @@
+---
+# Homepage Dashboard — Settings
+# Docs: https://gethomepage.dev/configs/settings/
+
+title: Homelab Dashboard
+
+background:
+  image: ""
+  blur: sm
+  opacity: 75
+
+theme: dark
+color: slate
+
+headerStyle: clean
+
+layout:
+  Infrastructure:
+    style: row
+    columns: 2
+  Media:
+    style: row
+    columns: 2
+  Databases:
+    style: row
+    columns: 3
