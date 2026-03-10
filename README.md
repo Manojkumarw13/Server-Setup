@@ -56,19 +56,34 @@ Server-Setup/
 └── README.md                   # This file
 ```
 
+## The Complete Beginner's Handbook
+
+This project features a comprehensive [**Beginner's Handbook**](Deployment-Guide.md) that explains everything from scratch, assuming zero prior cloud experience. In the guide, you'll learn to:
+
+- Create your absolutely free Oracle VM, Network, and 150GB external data drive
+- Configure maximum security **Bastion Access** (Zero SSH public exposure)
+- Mount storage, optimize the OS kernel, and configure a 6GB swap file
+- Deploy automated weekly backups to protect your hard drive
+- Secure the setup with an Oracle Load Balancer and HTTPS
+- Configure 9 essential self-hosted containers on custom internal/public networks
+
+---
+
 ## Quick Start
 
-1. **Read** [`Deployment-Guide.md`](Deployment-Guide.md) — follow every phase in order.
-2. **Fill in** `.env` with your passwords and generated keys.
+1. **Read** the [Beginner's Handbook (`Deployment-Guide.md`)](Deployment-Guide.md) – start here and follow every phase in order.
+2. **Fill in** `.env` with your secure passwords and generated keys.
 3. **Replace** `yourdomain.com` in all Nginx configs and `.env` with your actual domain.
 4. **Copy** files to the server at `/data/` and deploy with `docker compose up -d`.
 
-## Security Notes
+## Security & Performance Notes
 
-- `.env` contains all secrets — **never commit it** (already in `.gitignore`).
-- Databases are on an isolated Docker network (`internal-net`) with no internet access.
-- Port 80 is restricted to the OCI Load Balancer's subnet via VCN Security List.
-- SSH access is via OCI Bastion only — no port 22 rule exists.
+- **Secrets:** `.env` contains all credentials — **never commit it** (already in `.gitignore`).
+- **Isolation:** Databases are strictly isolated on a Docker network (`internal-net`) with zero internet access.
+- **VCN Firewall:** Port 80 is strictly restricted to the OCI Load Balancer's subnet via VCN Security List.
+- **Bastion SSH:** SSH access requires OCI Managed Bastion authentication — port 22 is completely blocked natively.
+- **Storage Protection:** A dedicated 150GB volume ensures data outlives the boot drive, complete with automated cron backups.
+- **Resource Limits:** Hard-coded container memory limits (`mem_limit`) ensure the 24GB RAM VM remains perfectly stable under load.
 
 ## Architecture
 
